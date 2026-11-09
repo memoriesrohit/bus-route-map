@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hosur Road Bus Route</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: transit-strip sidebar (stops in time order) beside an India-wide tiled map */
+:root{
+  --bg:#eef1ef; --panel:#ffffff; --fg:#17201d; --muted:#5f6b66; --line:#d9dfdb;
+  --route:#0d7a5f; --pick:#e2861b; --pick-soft:#fdebd3; --me:#2f7cf6;
+  --display:"Archivo",ui-sans-serif,system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#111614; --panel:#1b2220; --fg:#e7ece9; --muted:#97a39e; --line:#2c3532;
+  --route:#3fcf9f; --pick:#f2a443; --pick-soft:#3a2b17; --me:#5b9bff; color-scheme:dark}}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--display);font-size:15px}
+.app{display:grid;grid-template-columns:340px 1fr;height:100%}
+aside{background:var(--panel);border-right:1px solid var(--line);overflow:auto;padding-block:22px;
+  padding-left:max(20px,env(safe-area-inset-left,0px));padding-right:20px;display:flex;flex-direction:column;gap:18px}
+h1{font-size:1.45rem;font-weight:800;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;line-height:1.45}
+.facts{display:flex;gap:18px;font-family:var(--mono);font-size:.8rem;color:var(--muted)}
+.facts b{display:block;font-size:1.05rem;color:var(--fg)}
+ol{list-style:none;margin:0;padding:0;position:relative}
+ol::before{content:"";position:absolute;left:62px;top:18px;bottom:18px;width:4px;border-radius:2px;background:var(--route)}
+li button{all:unset;box-sizing:border-box;width:100%;display:grid;grid-template-columns:48px 32px 1fr;align-items:start;padding:9px 6px;border-radius:8px;cursor:pointer}
+li button:hover{background:var(--bg)}
+li button:focus-visible{outline:2px solid var(--route);outline-offset:1px}
+.time{font-family:var(--mono);font-weight:700;font-size:.9rem;padding-top:2px;font-variant-numeric:tabular-nums}
+.dot{justify-self:center;margin-top:3px;width:14px;height:14px;border-radius:50%;background:var(--panel);border:3.5px solid var(--route);position:relative;z-index:1;box-sizing:border-box}
+.name{font-weight:700;line-height:1.25}
+.name small{font-family:var(--mono);font-weight:500;color:var(--muted);font-size:.72rem;margin-left:4px}
+.desc{display:block;color:var(--muted);font-size:.83rem;line-height:1.35;margin-top:2px}
+li.pick button{background:var(--pick-soft)}
+li.pick .dot{border-color:var(--pick);width:18px;height:18px;margin-top:1px}
+.tag{display:inline-block;margin-top:5px;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--pick)}
+.more{display:grid;grid-template-columns:48px 32px 1fr;padding:4px 6px;color:var(--muted);font-size:.83rem}
+.more span:nth-child(2){justify-self:center;font-weight:800;letter-spacing:2px;color:var(--route)}
+.note{font-size:.78rem;color:var(--muted);line-height:1.45;border-top:1px solid var(--line);padding-top:12px;margin-top:auto}
+.mapwrap{position:relative;min-width:0}
+#map{position:absolute;inset:0;background:var(--bg)}
+.ctrl{position:absolute;z-index:500;right:max(12px,env(safe-area-inset-right,0px));top:12px;display:flex;flex-direction:column;gap:6px}
+.ctrl button{min-width:40px;height:40px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font:700 13px var(--display);cursor:pointer;box-shadow:0 1px 4px #0003;display:flex;align-items:center;justify-content:center;gap:6px}
+.ctrl button:focus-visible{outline:2px solid var(--route)}
+.ctrl button.on{color:var(--me)}
+.ctrl button[disabled]{opacity:.6;cursor:progress}
+.card{position:absolute;z-index:500;left:12px;bottom:max(28px,calc(env(safe-area-inset-bottom,0px) + 22px));width:min(380px,calc(100% - 24px));box-sizing:border-box;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 14px 12px;box-shadow:0 6px 24px #0004;display:flex;flex-direction:column;gap:8px}
+.card .top{display:flex;justify-content:space-between;gap:10px;align-items:start}
+.card h2{margin:0;font-size:1.05rem;font-weight:800}
+.card h2 span{font-family:var(--mono);color:var(--muted);font-weight:700;margin-right:6px}
+.card p{margin:0;color:var(--muted);font-size:.85rem;line-height:1.4}
+.card .x{all:unset;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;padding:0 4px}
+.card .acts{display:flex;gap:8px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:8px;font-weight:700;font-size:.88rem;text-decoration:none;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--fg);font-family:var(--display)}
+.btn.primary{background:var(--route);border-color:var(--route);color:#fff}
+@media (prefers-color-scheme:dark){.btn.primary{color:#0d1411}}
+.btn:focus-visible{outline:2px solid var(--pick);outline-offset:2px}
+.dist{font-family:var(--mono);font-size:.8rem;color:var(--me)}
+.stop-ic{width:16px;height:16px;border-radius:50%;background:#fff;border:4px solid var(--route);box-sizing:border-box;box-shadow:0 1px 3px #0005}
+.stop-ic.pick{border-color:var(--pick);width:22px;height:22px}
+.me-ic{width:18px;height:18px;border-radius:50%;background:var(--me);border:3px solid #fff;box-sizing:border-box;box-shadow:0 0 0 6px color-mix(in srgb,var(--me) 25%,transparent)}
+.leaflet-tooltip.lbl{font-family:var(--display);font-weight:700;font-size:12px;padding:2px 6px;border-radius:6px}
+.leaflet-tooltip.lbl b{font-family:var(--mono);color:#5f6b66;margin-right:4px}
+@media (prefers-color-scheme:dark){.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr;grid-template-rows:62vh auto;height:auto}
+  .mapwrap{order:-1;height:62vh}
+  aside{border-right:0;border-top:1px solid var(--line);overflow:visible;padding-right:max(16px,env(safe-area-inset-right,0px));padding-left:max(16px,env(safe-area-inset-left,0px))}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div>
+      <h1>Hosur Road bus route</h1>
+      <p class="sub">Attibele Toll to Madiwala, inbound along NH&nbsp;44 into Bengaluru. Tap a stop for directions from where you are.</p>
+    </div>
+    <div class="facts"><div><b>7</b>stops shown</div><div><b>~25 km</b>by road</div><div><b>55 min</b>scheduled</div></div>
+    <ol id="list"></ol>
+    <div class="more"><span></span><span>⋮</span><span>More boarding points after Madiwala are not listed yet</span></div>
+    <p class="note">Stop positions are approximate, placed from the ticket addresses and snapped to Hosur Road. Route from OpenStreetMap routing.</p>
+  </aside>
+  <div class="mapwrap">
+    <div id="map" role="application" aria-label="Map of India with the bus route along Hosur Road"></div>
+    <div class="ctrl">
+      <button id="locate" title="Show my location"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4" stroke="currentColor" stroke-width="2"/></svg>My location</button>
+      <button id="india" title="Zoom out to all of India">All India</button>
+      <button id="route" title="Zoom to the bus route">Bus route</button>
+    </div>
+    <div class="card" id="card" hidden role="dialog" aria-live="polite"></div>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+const ROUTE=[[12.77661,77.77711],[12.7767,77.77696],[12.77698,77.77644],[12.77752,77.77545],[12.77775,77.77502],[12.77782,77.77489],[12.77789,77.77469],[12.77801,77.77434],[12.77808,77.77405],[12.77815,77.77369],[12.77831,77.77288],[12.77838,77.7725],[12.77851,77.77182],[12.77871,77.77081],[12.77889,77.77001],[12.77906,77.76939],[12.77908,77.76931],[12.77931,77.76847],[12.77945,77.768],[12.77953,77.76771],[12.78009,77.76616],[12.78033,77.76561],[12.78125,77.76361],[12.78153,77.76298],[12.78224,77.76146],[12.78255,77.76069],[12.78279,77.76013],[12.78293,77.7597],[12.78305,77.75928],[12.78312,77.75897],[12.78324,77.75843],[12.78336,77.75783],[12.78355,77.75677],[12.78375,77.75562],[12.78375,77.75559],[12.78386,77.75494],[12.78393,77.75458],[12.78402,77.75422],[12.78412,77.75388],[12.78427,77.75351],[12.78459,77.75278],[12.78487,77.75207],[12.78495,77.75189],[12.78525,77.75122],[12.78551,77.75064],[12.7857,77.75014],[12.7858,77.74987],[12.78586,77.74962],[12.78594,77.74934],[12.78601,77.74897],[12.78605,77.74862],[12.78606,77.74841],[12.78607,77.74825],[12.7861,77.74749],[12.78615,77.74597],[12.78623,77.74482],[12.78631,77.74355],[12.78638,77.74299],[12.7865,77.74233],[12.78659,77.74178],[12.7866,77.74175],[12.7866,77.74172],[12.78662,77.74165],[12.78681,77.74075],[12.78698,77.73979],[12.78706,77.73945],[12.78713,77.73912],[12.78722,77.73877],[12.78733,77.73845],[12.7875,77.73799],[12.78779,77.73731],[12.78821,77.73637],[12.78868,77.73524],[12.78902,77.7345],[12.78927,77.73405],[12.78952,77.73361],[12.79018,77.73261],[12.79092,77.73147],[12.79125,77.73095],[12.79142,77.73063],[12.79145,77.73057],[12.79159,77.73023],[12.79181,77.72962],[12.79194,77.72918],[12.79217,77.72828],[12.79241,77.72744],[12.7926,77.72672],[12.79281,77.72589],[12.79306,77.72496],[12.79329,77.72409],[12.79352,77.72312],[12.79359,77.72287],[12.79369,77.72248],[12.79389,77.72171],[12.79405,77.72115],[12.79421,77.72066],[12.7943,77.72042],[12.79441,77.7202],[12.79466,77.7198],[12.79486,77.71952],[12.79512,77.71922],[12.79538,77.71897],[12.79567,77.71876],[12.7963,77.71832],[12.79675,77.71803],[12.79734,77.71767],[12.79773,77.71741],[12.79778,77.71737],[12.79794,77.71725],[12.7981,77.7171],[12.79839,77.71684],[12.7986,77.71663],[12.79879,77.71642],[12.79904,77.71614],[12.79927,77.71584],[12.79946,77.71557],[12.79956,77.71541],[12.79962,77.71529],[12.79972,77.71512],[12.79986,77.71485],[12.8,77.7146],[12.80023,77.71416],[12.80045,77.71376],[12.80074,77.71326],[12.80129,77.71223],[12.80148,77.71187],[12.80154,77.71174],[12.80166,77.7115],[12.80177,77.71121],[12.80187,77.71086],[12.80192,77.71057],[12.80193,77.71042],[12.80193,77.71018],[12.80195,77.70964],[12.80194,77.70946],[12.80191,77.70862],[12.80192,77.7082],[12.80192,77.70784],[12.80194,77.70725],[12.80203,77.70644],[12.80213,77.70577],[12.80214,77.70568],[12.80224,77.70499],[12.80232,77.70451],[12.80241,77.70405],[12.80251,77.70364],[12.80261,77.70325],[12.80268,77.70304],[12.80276,77.70282],[12.80284,77.70261],[12.80297,77.70232],[12.80308,77.7021],[12.80314,77.702],[12.80327,77.70178],[12.8035,77.70147],[12.80372,77.70122],[12.80385,77.70109],[12.80409,77.70087],[12.8045,77.70052],[12.80462,77.70042],[12.80498,77.70012],[12.80617,77.69914],[12.80865,77.69716],[12.80969,77.69633],[12.8108,77.69544],[12.81206,77.69444],[12.81568,77.69156],[12.81696,77.69056],[12.81818,77.6896],[12.81888,77.68903],[12.81925,77.68868],[12.81972,77.68825],[12.82067,77.68734],[12.82121,77.68683],[12.82211,77.68598],[12.82257,77.68555],[12.82332,77.68484],[12.82378,77.68441],[12.82405,77.68418],[12.82423,77.68403],[12.82469,77.68366],[12.82488,77.68352],[12.82541,77.68315],[12.82567,77.68301],[12.8257,77.68299],[12.82616,77.68274],[12.82618,77.68273],[12.82662,77.68247],[12.82685,77.68236],[12.82702,77.68228],[12.82739,77.68211],[12.82765,77.682],[12.82769,77.68198],[12.82806,77.68183],[12.82816,77.6818],[12.82886,77.68155],[12.83012,77.68117],[12.83027,77.68112],[12.83297,77.6803],[12.83341,77.68015],[12.83601,77.67919],[12.83738,77.67867],[12.83765,77.67854],[12.83784,77.67844],[12.83801,77.67835],[12.83815,77.67826],[12.83835,77.67813],[12.83877,77.67781],[12.83881,77.67778],[12.83931,77.6774],[12.83981,77.677],[12.83991,77.67693],[12.84096,77.6761],[12.84126,77.67587],[12.8433,77.67429],[12.84346,77.67415],[12.84347,77.67414],[12.84357,77.67405],[12.84526,77.67276],[12.84554,77.67254],[12.84559,77.6725],[12.84565,77.67246],[12.84569,77.67243],[12.84623,77.67201],[12.84675,77.67162],[12.84708,77.67136],[12.84736,77.67115],[12.84767,77.67092],[12.84769,77.6709],[12.84825,77.67039],[12.85341,77.66635],[12.85429,77.66562],[12.85473,77.66527],[12.85588,77.66435],[12.85593,77.66431],[12.85602,77.66425],[12.85621,77.66408],[12.85696,77.66346],[12.859,77.66188],[12.85921,77.66171],[12.86003,77.66106],[12.86041,77.66075],[12.86138,77.65999],[12.8628,77.65886],[12.86448,77.65753],[12.86486,77.65724],[12.86714,77.65543],[12.86751,77.65513],[12.86972,77.65339],[12.86975,77.65336],[12.86979,77.65333],[12.86983,77.6533],[12.86987,77.65327],[12.87179,77.65174],[12.87185,77.65169],[12.87187,77.65167],[12.87198,77.65158],[12.87259,77.6511],[12.87304,77.65073],[12.87348,77.65036],[12.87477,77.64919],[12.87493,77.64904],[12.87496,77.64902],[12.87537,77.64866],[12.87631,77.64782],[12.87671,77.64751],[12.87705,77.64728],[12.8772,77.64717],[12.87738,77.64705],[12.8802,77.64532],[12.88481,77.64249],[12.88709,77.6411],[12.8873,77.64097],[12.88799,77.64054],[12.88905,77.6399],[12.88908,77.63987],[12.88914,77.63984],[12.88923,77.63978],[12.8893,77.63974],[12.89084,77.63878],[12.89256,77.63771],[12.89377,77.63698],[12.89424,77.63668],[12.89432,77.63664],[12.89523,77.63608],[12.8967,77.63518],[12.89949,77.63345],[12.89984,77.63324],[12.90115,77.63244],[12.90264,77.63152],[12.90525,77.62991],[12.90692,77.62888],[12.90705,77.6288],[12.90712,77.62876],[12.90714,77.62874],[12.90868,77.62779],[12.90925,77.62743],[12.90936,77.62735],[12.90962,77.62725],[12.91,77.62701],[12.91146,77.62612],[12.91303,77.62516],[12.91359,77.62481],[12.9143,77.62436],[12.9146,77.6242],[12.91479,77.62409],[12.91507,77.62394],[12.91614,77.62335],[12.91711,77.62279],[12.9172,77.62274],[12.91762,77.62248],[12.91862,77.62186],[12.91897,77.62159],[12.91938,77.62129],[12.91968,77.62105],[12.92001,77.62085],[12.92037,77.62063],[12.9206,77.6205],[12.92093,77.6203],[12.92101,77.62025],[12.92116,77.62017],[12.92122,77.62014],[12.92127,77.62011],[12.92158,77.61993],[12.9222,77.61957],[12.92257,77.61936],[12.92283,77.6192],[12.92317,77.61897],[12.92343,77.61879],[12.92348,77.61876],[12.92371,77.6186],[12.92379,77.61848],[12.92399,77.61835],[12.92389,77.61821],[12.9237,77.61794],[12.92299,77.61774]];
+const STOPS=[{"t": "15:45", "n": "Attibele Toll", "side": "W", "d": "After Attibele toll", "lat": 12.77661, "lon": 77.77711}, {"t": "15:59", "n": "Chandapura", "side": "N", "d": "Sangeetha Mobile, next to Hennagara Gate Rd", "lat": 12.80214, "lon": 77.70568}, {"t": "16:00", "n": "Bommasandra", "side": "N", "d": "Narayana Hrudayalaya skywalk", "lat": 12.8108, "lon": 77.69545}, {"t": "16:05", "n": "Hebbagodi", "side": "N", "d": "Hebbagodi bus stop, opp. Noorani Masjid", "lat": 12.83297, "lon": 77.6803}, {"t": "16:15", "n": "Electronic City", "side": "N", "d": "After E-City toll plaza, below the bridge", "lat": 12.84825, "lon": 77.67039}, {"t": "16:30", "n": "Silk Board", "side": "N", "d": "Mahindra showroom, Silk Board skywalk", "lat": 12.91614, "lon": 77.62335}, {"t": "16:40", "n": "Madiwala", "side": "N", "d": "Savoury Business Hotel, Hosur Rd", "lat": 12.92299, "lon": 77.61774}];
+const PICK="Electronic City";
+const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const map=L.map('map',{zoomControl:true,worldCopyJump:true,minZoom:3}).setView([22.5,80],5);
+map.zoomControl.setPosition('bottomright');
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+
+const INDIA=L.latLngBounds([6.5,68],[35.7,97.5]);
+L.polyline(ROUTE,{color:dark?'#111614':'#fff',weight:10,opacity:.9}).addTo(map);
+const routeLine=L.polyline(ROUTE,{color:css('--route'),weight:5}).addTo(map);
+const routeBounds=routeLine.getBounds().pad(.08);
+
+const list=document.getElementById('list');
+STOPS.forEach((s,i)=>{
+  const pick=s.n===PICK;
+  const m=L.marker([s.lat,s.lon],{icon:L.divIcon({className:'',html:`<div class="stop-ic${pick?' pick':''}"></div>`,iconSize:pick?[22,22]:[16,16]}),
+    title:s.n,zIndexOffset:pick?1000:0}).addTo(map);
+  m.bindTooltip(`<b>${s.t}</b>${s.n}`,{className:'lbl',direction:i===6?'left':'right',offset:[i===6?-10:10,0],permanent:false});
+  m.on('click',()=>select(i));
+  s.m=m;
+  const li=document.createElement('li');if(pick)li.className='pick';
+  li.innerHTML=`<button><span class="time">${s.t}</span><span class="dot"></span><span><span class="name">${s.n}<small>(${s.side})</small></span><span class="desc">${s.d}</span>${pick?'<span class="tag">Your boarding point</span>':''}</span></button>`;
+  li.querySelector('button').onclick=()=>{select(i);document.querySelector('.mapwrap').scrollIntoView({block:'nearest',behavior:'smooth'})};
+  list.appendChild(li);
+});
+// permanent labels only once zoomed in on the route
+function labels(){const z=map.getZoom();STOPS.forEach(s=>{const tt=s.m.getTooltip();
+  if(z>=12&&!tt.options.permanent){s.m.unbindTooltip();s.m.bindTooltip(tt.getContent(),{...tt.options,permanent:true}).openTooltip()}
+  else if(z<12&&tt.options.permanent){s.m.unbindTooltip();s.m.bindTooltip(tt.getContent(),{...tt.options,permanent:false})}})}
+map.on('zoomend',labels);
+
+const km=(a,b)=>{const R=6371,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lon-a.lon)*r;
+  const h=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+const fmt=d=>d<1?Math.round(d*1000)+' m':(d<100?d.toFixed(1):Math.round(d))+' km';
+const gmaps=(s,o)=>'https://www.google.com/maps/dir/?api=1'+(o?`&origin=${o.lat},${o.lon}`:'')+`&destination=${s.lat},${s.lon}&travelmode=driving`;
+
+const card=document.getElementById('card');
+let me=null,meLayer=L.layerGroup().addTo(map),line=null,sel=null;
+function showCard(h){card.innerHTML=h;card.hidden=false;const x=card.querySelector('.x');if(x)x.onclick=()=>{card.hidden=true;sel=null;drawLine()}}
+function drawLine(){if(line){map.removeLayer(line);line=null}
+  if(me&&sel!==null){const s=STOPS[sel];line=L.polyline([[me.lat,me.lon],[s.lat,s.lon]],{color:css('--me'),weight:3,dashArray:'8 8'}).addTo(map)}}
+function fitBoth(s){map.fitBounds(L.latLngBounds([[me.lat,me.lon],[s.lat,s.lon]]).pad(.25),{maxZoom:15,paddingBottomRight:[0,140]})}
+
+function select(i){
+  const s=STOPS[i];sel=i;
+  const dist=me?`<span class="dist">${fmt(km(me,s))} from you in a straight line</span>`:'';
+  showCard(`<div class="top"><h2><span>${s.t}</span>${s.n} (${s.side})</h2><button class="x" aria-label="Close">×</button></div>
+    <p>${s.d}</p>${dist}
+    <div class="acts"><a class="btn primary" href="${gmaps(s,me)}" target="_blank" rel="noopener">Directions from my location ↗</a>
+    ${me?'':'<button class="btn" id="cardLoc">Show me on the map</button>'}</div>`);
+  const b=document.getElementById('cardLoc');if(b)b.onclick=locate;
+  drawLine();
+  if(me)fitBoth(s);else map.flyTo([s.lat,s.lon],15,{duration:.8});
+}
+
+function locate(){
+  const btn=document.getElementById('locate');
+  const fail=msg=>showCard(`<div class="top"><h2>Location unavailable</h2><button class="x" aria-label="Close">×</button></div><p>${msg}</p>`);
+  if(!('geolocation' in navigator)){fail('This browser cannot share your location.');return}
+  if(!isSecureContext){fail('Location only works when this page is opened over https.');return}
+  btn.disabled=true;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    btn.disabled=false;btn.classList.add('on');
+    me={lat:pos.coords.latitude,lon:pos.coords.longitude,acc:pos.coords.accuracy||50};
+    meLayer.clearLayers();
+    L.circle([me.lat,me.lon],{radius:me.acc,color:css('--me'),weight:1,fillOpacity:.12}).addTo(meLayer);
+    L.marker([me.lat,me.lon],{icon:L.divIcon({className:'',html:'<div class="me-ic"></div>',iconSize:[18,18]}),zIndexOffset:2000,title:'You'}).bindTooltip('You are here',{className:'lbl'}).addTo(meLayer);
+    if(sel!==null){select(sel);return}
+    let near=0,best=1e9;STOPS.forEach((s,i)=>{const d=km(me,s);if(d<best){best=d;near=i}});
+    const s=STOPS[near];sel=near;drawLine();
+    showCard(`<div class="top"><h2>You are here</h2><button class="x" aria-label="Close">×</button></div>
+      <p>Nearest boarding point: <b>${s.n}</b> (${s.t}), <span class="dist">${fmt(best)}</span> away in a straight line.</p>
+      <div class="acts"><a class="btn primary" href="${gmaps(s,me)}" target="_blank" rel="noopener">Directions to ${s.n} ↗</a></div>`);
+    fitBoth(s);
+  },err=>{
+    btn.disabled=false;
+    fail(err.code===1
+      ?'Location permission is blocked for this site. Click the icon at the left of the address bar, set Location to Allow, then tap My location again.'
+      :'Your location could not be found right now. Check that location services are on for your device, then try again.');
+  },{enableHighAccuracy:true,timeout:15000,maximumAge:30000});
+}
+document.getElementById('locate').onclick=locate;
+document.getElementById('india').onclick=()=>map.flyToBounds(INDIA,{duration:.8});
+document.getElementById('route').onclick=()=>map.flyToBounds(routeBounds,{duration:.8});
+
+map.fitBounds(routeBounds);
+</script>
+</body>
+</html>
