@@ -89,6 +89,10 @@ ol.drop .dot{border-color:var(--drop);border-radius:4px}
 .results button:hover,.results button:focus-visible{background:var(--bg)}
 .results b{display:block;font-weight:700}
 .results small{color:var(--muted)}
+.results button.on{background:var(--bg);outline:2px solid var(--route);outline-offset:-2px}
+.results .kind{font-family:var(--mono);font-weight:500;font-size:.68rem;color:var(--route);margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
+.results .gm{display:block;padding:8px 10px;border-top:1px solid var(--line);margin-top:2px;color:var(--route);font-weight:700;font-size:.85rem;text-decoration:none}
+.results .gm:hover{text-decoration:underline}
 .results .msg{padding:8px 10px;color:var(--muted);font-size:.85rem}
 .place-ic{width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#d93b3b;border:3px solid #fff;box-sizing:border-box;box-shadow:0 1px 4px #0006}
 @media (max-width:760px){.search{right:12px;top:12px}.ctrl{top:64px}}
@@ -122,7 +126,7 @@ ol.drop .dot{border-color:var(--drop);border-radius:4px}
   <div class="mapwrap">
     <div id="map" role="application" aria-label="Map of India with the Bengaluru to Pune bus route"></div>
     <div class="search">
-      <form id="sform" role="search"><input id="q" type="search" placeholder="Search any place in India" aria-label="Search any place in India" autocomplete="off" enterkeyhint="search"><button class="go" type="submit">Search</button></form>
+      <form id="sform" role="search"><input id="q" type="search" placeholder="Search any place in India, e.g. Phoenix Market City" aria-label="Search any place in India" autocomplete="off" enterkeyhint="search"><button class="go" type="submit">Search</button></form>
       <ul class="results" id="results" hidden></ul>
     </div>
     <div class="ctrl">
@@ -267,25 +271,63 @@ function showPlace(r){
   const x=card.querySelector('.x');x.onclick=()=>{card.hidden=true;placeLayer.clearLayers()};
   map.fitBounds(L.latLngBounds([[p.lat,p.lon],[near.lat,near.lon]]).pad(.3),{maxZoom:15,paddingTopLeft:[20,70],paddingBottomRight:[20,card.offsetHeight+40]});
 }
+// type-ahead suggestions from Photon (OpenStreetMap data), India only, biased to the current map view
+const KIND={residential:'Residential',apartments:'Apartments',commercial:'Commercial',office:'Office',retail:'Shopping',mall:'Mall',
+  construction:'Under construction',bus_station:'Bus station',bus_stop:'Bus stop',station:'Station',restaurant:'Restaurant',cafe:'Cafe',
+  hospital:'Hospital',school:'School',college:'College',university:'University',hotel:'Hotel',city:'City',town:'Town',village:'Village',
+  suburb:'Area',neighbourhood:'Area',locality:'Area',state:'State',district:'District',county:'District',place_of_worship:'Place of worship',
+  temple:'Temple',park:'Park',attraction:'Attraction',airport:'Airport',aerodrome:'Airport',primary:'Road',secondary:'Road',tertiary:'Road',residential_road:'Road'};
+let ctl=null,timer=null,items=[],active=-1;
+function toPlace(f){const p=f.properties,[lon,lat]=f.geometry.coordinates;
+  const ctx=[p.housenumber&&p.street?p.housenumber+' '+p.street:p.street,p.locality,p.district,p.city,p.county,p.state,p.postcode].filter((v,i,a)=>v&&v!==p.name&&a.indexOf(v)===i);
+  return {lat,lon,name:p.name||p.street||ctx[0]||'Place',display_name:[p.name,...ctx].filter(Boolean).join(', '),ctx:ctx.slice(0,4).join(', '),kind:KIND[p.osm_value]||(['yes','no','unclassified'].includes(p.osm_value)?'':(p.osm_value||'').replace(/_/g,' '))}}
+function render(q){
+  results.innerHTML='';
+  items.forEach((r,i)=>{const li=document.createElement('li'),b=document.createElement('button');
+    b.type='button';b.id='opt'+i;b.setAttribute('role','option');
+    b.innerHTML=`<b>${esc(r.name)}${r.kind?` <span class="kind">${esc(r.kind)}</span>`:''}</b><small>${esc(r.ctx)}</small>`;
+    b.onmousedown=e=>e.preventDefault();b.onclick=()=>pick(i);li.appendChild(b);results.appendChild(li)});
+  if(!items.length)results.insertAdjacentHTML('beforeend',`<li class="msg">No matches in OpenStreetMap for “${esc(q)}” yet. Keep typing, or try the area name.</li>`);
+  results.insertAdjacentHTML('beforeend',`<li><a class="gm" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}" target="_blank" rel="noopener">Search “${esc(q)}” on Google Maps ↗</a></li>`);
+  results.hidden=false;active=-1;
+}
+function highlight(i){active=i;results.querySelectorAll('button[role=option]').forEach((b,j)=>b.classList.toggle('on',j===i));
+  const b=document.getElementById('opt'+i);if(b)b.scrollIntoView({block:'nearest'})}
+function pick(i){const r=items[i];if(!r)return;qIn.value=r.name;showPlace(r)}
+async function suggest(q){
+  if(ctl)ctl.abort();ctl=new AbortController();
+  const c=map.getCenter();
+  const url=`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=12&lang=en&bbox=68,6.5,97.6,35.7&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`;
+  if(!items.length){results.innerHTML='<li class="msg">Looking up places…</li>';results.hidden=false}
+  try{const res=await fetch(url,{signal:ctl.signal});if(!res.ok)throw new Error(res.status);
+    const j=await res.json();
+    if(qIn.value.trim()!==q)return;
+    items=j.features.filter(f=>f.properties.countrycode==='IN').slice(0,7).map(toPlace);render(q);
+  }catch(err){if(err.name==='AbortError')return;items=[];
+    results.innerHTML=`<li class="msg">Suggestions are not responding right now. Press Search to try again.</li><li><a class="gm" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}" target="_blank" rel="noopener">Search “${esc(q)}” on Google Maps ↗</a></li>`;results.hidden=false}
+}
+qIn.setAttribute('role','combobox');qIn.setAttribute('aria-autocomplete','list');qIn.setAttribute('aria-controls','results');results.setAttribute('role','listbox');
+qIn.addEventListener('input',()=>{
+  clearTimeout(timer);const q=qIn.value.trim();
+  if(q.length<2){items=[];results.hidden=true;if(ctl)ctl.abort();return}
+  timer=setTimeout(()=>suggest(q),250);
+});
+qIn.addEventListener('keydown',e=>{
+  const n=items.length;
+  if(e.key==='ArrowDown'&&n){e.preventDefault();highlight((active+1)%n)}
+  else if(e.key==='ArrowUp'&&n){e.preventDefault();highlight((active-1+n)%n)}
+  else if(e.key==='Escape'){results.hidden=true}
+});
+qIn.addEventListener('focus',()=>{if(qIn.value.trim().length>=2&&results.children.length)results.hidden=false});
+qIn.addEventListener('blur',()=>setTimeout(()=>{if(!results.contains(document.activeElement))results.hidden=true},150));
 document.getElementById('sform').addEventListener('submit',async e=>{
   e.preventDefault();const q=qIn.value.trim();if(!q)return;
-  const wait=Math.max(0,1100-(Date.now()-lastSearch));if(wait)await new Promise(r=>setTimeout(r,wait));lastSearch=Date.now();
-  results.innerHTML='<li class="msg">Searching…</li>';results.hidden=false;
-  try{
-    const res=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=in&limit=6&accept-language=en&q=${encodeURIComponent(q)}`);
-    if(!res.ok)throw new Error(res.status);
-    const list=await res.json();
-    if(!list.length){results.innerHTML=`<li class="msg">No places found for “${esc(q)}”. Try adding the area or city name.</li>`;return}
-    results.innerHTML='';
-    list.forEach(r=>{const li=document.createElement('li'),b=document.createElement('button');
-      const parts=r.display_name.split(', ');
-      b.innerHTML=`<b>${esc(r.name||parts[0])}</b><small>${esc(parts.slice(1,5).join(', '))}</small>`;
-      b.onclick=()=>showPlace(r);li.appendChild(b);results.appendChild(li)});
-    if(list.length===1)showPlace(list[0]);
-  }catch(err){results.innerHTML='<li class="msg">Search is not responding right now. Wait a few seconds and try again.</li>'}
+  if(active>=0&&items[active]){pick(active);return}
+  clearTimeout(timer);await suggest(q);
+  if(items.length)pick(0);
 });
-qIn.addEventListener('input',()=>{if(!qIn.value)results.hidden=true});
 map.on('click',()=>{results.hidden=true});
+
 
 map.fitBounds(routeBounds);towns();
 </script>
