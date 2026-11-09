@@ -94,6 +94,23 @@ ol.drop .dot{border-color:var(--drop);border-radius:4px}
 .results .gm{display:block;padding:8px 10px;border-top:1px solid var(--line);margin-top:2px;color:var(--route);font-weight:700;font-size:.85rem;text-decoration:none}
 .results .gm:hover{text-decoration:underline}
 .results .msg{padding:8px 10px;color:var(--muted);font-size:.85rem}
+.trip{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
+.trip .big{font-size:1.35rem;font-weight:800;color:var(--route)}
+.trip .km{font-family:var(--mono);font-size:.9rem;color:var(--muted)}
+.trip .mode{font-size:.85rem;color:var(--muted)}
+.trip small{flex-basis:100%;color:var(--muted);font-size:.78rem}
+.rows{display:flex;flex-direction:column;gap:2px}
+.rows .rh{font-size:.7rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.row{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:6px 8px;border-radius:7px;cursor:pointer;font-size:.86rem}
+.row:hover{background:var(--bg)}
+.row:focus-visible{outline:2px solid var(--route)}
+.row.on{background:var(--bg);box-shadow:inset 3px 0 0 var(--route)}
+.row .t{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.row .n{font-weight:700;min-width:0}
+.row .n em{font-style:normal;font-size:.68rem;color:var(--pick);text-transform:uppercase;letter-spacing:.04em;margin-left:4px}
+.row .v{font-family:var(--mono);font-size:.78rem;white-space:nowrap}
+.card .other{font-size:.8rem}
+.card{max-height:calc(100% - 90px);overflow:auto}
 .place-ic{width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#d93b3b;border:3px solid #fff;box-sizing:border-box;box-shadow:0 1px 4px #0006}
 @media (max-width:760px){.search{right:12px;top:12px}.ctrl{top:64px}}
 .stop-ic{width:16px;height:16px;border-radius:50%;background:#fff;border:4px solid var(--route);box-sizing:border-box;box-shadow:0 1px 3px #0005}
@@ -196,25 +213,80 @@ map.on('zoomend',labels);
 const km=(a,b)=>{const R=6371,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lon-a.lon)*r;
   const h=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
 const fmt=d=>d<1?Math.round(d*1000)+' m':(d<100?d.toFixed(1):Math.round(d))+' km';
-const gmaps=(s,o)=>'https://www.google.com/maps/dir/?api=1'+(o?`&origin=${o.lat},${o.lon}`:'')+`&destination=${s.lat},${s.lon}&travelmode=driving`;
-
 const card=document.getElementById('card');
-let me=null,meLayer=L.layerGroup().addTo(map),line=null,sel=null;
-function showCard(h){card.innerHTML=h;card.hidden=false;const x=card.querySelector('.x');if(x)x.onclick=()=>{card.hidden=true;sel=null;drawLine()}}
-function drawLine(){if(line){map.removeLayer(line);line=null}
-  if(me&&sel!==null){const s=STOPS[sel];line=L.polyline([[me.lat,me.lon],[s.lat,s.lon]],{color:css('--me'),weight:3,dashArray:'8 8'}).addTo(map)}}
-function fitBoth(s){map.fitBounds(L.latLngBounds([[me.lat,me.lon],[s.lat,s.lon]]).pad(.25),{maxZoom:15,paddingTopLeft:[20,70],paddingBottomRight:[20,card.hidden?40:card.offsetHeight+40]})}
+let me=null,meLayer=L.layerGroup().addTo(map),sel=null,token=0;
+const pathLayer=L.layerGroup().addTo(map),placeLayer=L.layerGroup().addTo(map);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtT=s=>{const m=Math.max(1,Math.round(s/60));return m<60?m+' min':Math.floor(m/60)+' hr'+(m%60?' '+(m%60)+' min':'')};
+
+// road routing on OpenStreetMap roads: OSRM project server for driving (fast), FOSSGIS servers for walking and as a backup
+const HOSTS={car:['https://router.project-osrm.org','https://routing.openstreetmap.de/routed-car'],foot:['https://routing.openstreetmap.de/routed-foot']};
+async function osrm(profile,svc,pts,q){
+  const path=`/${svc}/v1/driving/${pts.map(c=>(+c.lon).toFixed(6)+','+(+c.lat).toFixed(6)).join(';')}?${q}`;
+  let last;
+  for(const h of HOSTS[profile]){
+    const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),9000);
+    try{const r=await fetch(h+path,{signal:ac.signal});if(!r.ok)throw new Error(r.status);const j=await r.json();if(j.code!=='Ok')throw new Error(j.code);return j}
+    catch(e){last=e}finally{clearTimeout(tm)}
+  }
+  throw last}
+async function roadTo(o,s){
+  const j=await osrm('car','route',[o,s],'overview=full&geometries=geojson'),r=j.routes[0];
+  let walk=null;if(r.distance<6000){try{walk=(await osrm('foot','route',[o,s],'overview=false')).routes[0].duration}catch(e){}}
+  return {dist:r.distance/1000,dur:r.duration,walk,geom:r.geometry.coordinates.map(([a,b])=>[b,a])}}
+async function rank(o,k,n){
+  const c=STOPS.filter(s=>s.k===k).map(s=>({s,d:km(o,s)})).sort((a,b)=>a.d-b.d).slice(0,n);
+  try{const j=await osrm('car','table',[o,...c.map(x=>x.s)],'sources=0&annotations=duration,distance');
+    c.forEach((x,i)=>{const dd=j.distances[0][i+1],tt=j.durations[0][i+1];if(dd!=null){x.road=dd/1000;x.dur=tt}});
+    c.sort((a,b)=>(a.dur??1e9)-(b.dur??1e9)||a.d-b.d)}catch(e){}
+  return c}
+function drawPath(o,s,r,color){
+  pathLayer.clearLayers();
+  if(r){L.polyline(r.geom,{color:dark?'#111614':'#fff',weight:9,opacity:.9}).addTo(pathLayer);L.polyline(r.geom,{color,weight:5}).addTo(pathLayer)}
+  else L.polyline([[o.lat,o.lon],[s.lat,s.lon]],{color,weight:3,dashArray:'8 8'}).addTo(pathLayer)}
+function fitTo(o,s,r){const b=r?L.latLngBounds(r.geom):L.latLngBounds([[o.lat,o.lon],[s.lat,s.lon]]);b.extend([o.lat,o.lon]).extend([s.lat,s.lon]);
+  map.fitBounds(b.pad(.12),{maxZoom:16,paddingTopLeft:[20,70],paddingBottomRight:[20,card.hidden?40:card.offsetHeight+40]})}
+function closeAll(){token++;card.hidden=true;sel=null;pathLayer.clearLayers();placeLayer.clearLayers()}
+function showCard(h){card.innerHTML=h;card.hidden=false;const x=card.querySelector('.x');if(x)x.onclick=closeAll}
+const gmaps=(s,o)=>'https://www.google.com/maps/dir/?api=1'+(o?`&origin=${o.lat},${o.lon}`:'')+`&destination=${s.lat},${s.lon}&travelmode=driving`;
+const trip=(r,s,o)=>r?`<div class="trip"><span class="big">${fmtT(r.dur)}</span><span class="km">${fmt(r.dist)}</span><span class="mode">by car</span>
+  <small>Fastest road route to ${esc(s.n)}, without live traffic${r.walk?` · ${fmtT(r.walk)} on foot`:''}</small></div>`
+  :`<p class="dist">Road route unavailable right now. ${fmt(km(o,s))} in a straight line.</p>`;
+const when=s=>(s.day?s.day+' ':'')+s.t;
+
+// card for a searched place or the viewer's position: nearest stops ranked by drive time
+async function originCard(o,title,sub,color){
+  const t=++token;sel=null;pathLayer.clearLayers();
+  const head=`<div class="top"><h2>${esc(title)}</h2><button class="x" aria-label="Close">×</button></div>${sub?`<p>${esc(sub)}</p>`:''}`;
+  showCard(head+'<p class="dist">Finding the nearest stops by road…</p>');
+  const [b,d]=await Promise.all([rank(o,'board',4),rank(o,'drop',3)]);if(t!==token)return;
+  const k=d[0].d<b[0].d?'drop':'board',rows=(k==='board'?b:d).slice(0,3),other=k==='board'?d[0]:b[0];
+  async function render(i){
+    const s=rows[i].s;let route=null;
+    try{route=await roadTo(o,s)}catch(e){}
+    if(t!==token)return;
+    drawPath(o,s,route,color);
+    showCard(head+trip(route,s,o)+
+      `<div class="rows"><div class="rh">Nearest ${k==='board'?'boarding':'dropping'} points by road</div>`+
+      rows.map((x,j)=>`<button class="row${j===i?' on':''}" data-i="${j}"><span class="t">${when(x.s)}</span><span class="n">${esc(x.s.n)}${x.s.n===PICK?' <em>yours</em>':''}</span><span class="v">${x.dur!=null?fmtT(x.dur)+' · '+fmt(x.road):fmt(x.d)}</span></button>`).join('')+
+      `</div><p class="other">Nearest ${k==='board'?'dropping':'boarding'} point: <b>${esc(other.s.n)}</b> (${when(other.s)}), ${other.dur!=null?fmtT(other.dur)+' drive · '+fmt(other.road):fmt(other.d)}</p>
+      <div class="acts"><a class="btn primary" href="${gmaps(s,o)}" target="_blank" rel="noopener">Google Maps directions ↗</a></div>
+      <span class="dist">Google Maps adds live traffic, so its time can be longer.</span>`);
+    card.querySelectorAll('.row').forEach(bt=>bt.onclick=()=>{if(+bt.dataset.i!==i)render(+bt.dataset.i)});
+    fitTo(o,s,route);
+  }
+  render(0);
+}
 
 function select(i){
-  const s=STOPS[i];sel=i;
-  const dist=me?`<span class="dist">${fmt(km(me,s))} from you in a straight line</span>`:'';
-  showCard(`<div class="top"><h2><span>${s.day?s.day+' ':''}${s.t}</span>${s.n}${s.side?` (${s.side})`:''}</h2><button class="x" aria-label="Close">×</button></div>
-    <p>${s.k==='drop'?'Dropping point · ':'Boarding point · '}${s.d}</p>${dist}
-    <div class="acts"><a class="btn primary" href="${gmaps(s,me)}" target="_blank" rel="noopener">Directions from my location ↗</a>
-    ${me?'':'<button class="btn" id="cardLoc">Show me on the map</button>'}</div>`);
-  const b=document.getElementById('cardLoc');if(b)b.onclick=locate;
-  drawLine();
-  if(me)fitBoth(s);else map.flyTo([s.lat,s.lon],15,{duration:.8});
+  const s=STOPS[i],t=++token;sel=i;
+  const head=`<div class="top"><h2><span>${when(s)}</span>${esc(s.n)}${s.side?` (${s.side})`:''}</h2><button class="x" aria-label="Close">×</button></div>
+    <p>${s.k==='drop'?'Dropping point · ':'Boarding point · '}${esc(s.d)}</p>`;
+  const acts=`<div class="acts"><a class="btn primary" href="${gmaps(s,me)}" target="_blank" rel="noopener">Directions from my location ↗</a>${me?'':'<button class="btn" id="cardLoc">Show me on the map</button>'}</div>`;
+  pathLayer.clearLayers();
+  if(!me){showCard(head+acts);document.getElementById('cardLoc').onclick=locate;map.flyTo([s.lat,s.lon],15,{duration:.8});return}
+  showCard(head+'<p class="dist">Getting the road route from you…</p>'+acts);
+  roadTo(me,s).catch(()=>null).then(r=>{if(t!==token)return;drawPath(me,s,r,css('--me'));showCard(head+trip(r,s,me)+acts);fitTo(me,s,r)});
 }
 
 function locate(){
@@ -230,12 +302,8 @@ function locate(){
     L.circle([me.lat,me.lon],{radius:me.acc,color:css('--me'),weight:1,fillOpacity:.12}).addTo(meLayer);
     L.marker([me.lat,me.lon],{icon:L.divIcon({className:'',html:'<div class="me-ic"></div>',iconSize:[18,18]}),zIndexOffset:2000,title:'You'}).bindTooltip('You are here',{className:'lbl'}).addTo(meLayer);
     if(sel!==null){select(sel);return}
-    let near=0,best=1e9;STOPS.forEach((s,i)=>{const d=km(me,s);if(d<best){best=d;near=i}});
-    const s=STOPS[near];sel=near;drawLine();
-    showCard(`<div class="top"><h2>You are here</h2><button class="x" aria-label="Close">×</button></div>
-      <p>Nearest boarding point: <b>${s.n}</b> (${s.t}), <span class="dist">${fmt(best)}</span> away in a straight line.</p>
-      <div class="acts"><a class="btn primary" href="${gmaps(s,me)}" target="_blank" rel="noopener">Directions to ${s.n} ↗</a></div>`);
-    fitBoth(s);
+    placeLayer.clearLayers();
+    originCard(me,'You are here','',css('--me'));
   },err=>{
     btn.disabled=false;
     fail(err.code===1
@@ -250,26 +318,12 @@ const group=k=>L.latLngBounds(STOPS.filter(s=>s.k===k).map(s=>[s.lat,s.lon])).pa
 document.getElementById('blr').onclick=()=>map.flyToBounds(group('board'),{duration:.8});
 document.getElementById('pune').onclick=()=>map.flyToBounds(group('drop'),{duration:.8});
 
-// ---- place search (OpenStreetMap Nominatim, India only, on submit) ----
 const results=document.getElementById('results'),qIn=document.getElementById('q');
-const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let placeLayer=L.layerGroup().addTo(map),lastSearch=0;
-function nearest(p,k){let b=null,bd=1e9;STOPS.forEach(s=>{if(s.k!==k)return;const d=km(p,s);if(d<bd){bd=d;b=s}});return [b,bd]}
 function showPlace(r){
   const p={lat:+r.lat,lon:+r.lon},name=r.name||r.display_name.split(',')[0];
-  results.hidden=true;placeLayer.clearLayers();sel=null;drawLine();
+  results.hidden=true;placeLayer.clearLayers();
   L.marker([p.lat,p.lon],{icon:L.divIcon({className:'',html:'<div class="place-ic"></div>',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1500,title:name}).addTo(placeLayer);
-  const [nb,db]=nearest(p,'board'),[nd,dd]=nearest(p,'drop');
-  const near=db<=dd?nb:nd, nearD=Math.min(db,dd);
-  L.polyline([[p.lat,p.lon],[near.lat,near.lon]],{color:'#d93b3b',weight:3,dashArray:'8 8'}).addTo(placeLayer);
-  showCard(`<div class="top"><h2>${esc(name)}</h2><button class="x" aria-label="Close">×</button></div>
-    <p>${esc(r.display_name)}</p>
-    <p>Nearest boarding point: <b>${nb.n}</b> (${nb.t}), ${fmt(db)} away<br>Nearest dropping point: <b>${nd.n}</b> (13 Nov ${nd.t}), ${fmt(dd)} away</p>
-    <div class="acts"><a class="btn primary" href="https://www.google.com/maps/dir/?api=1&origin=${p.lat},${p.lon}&destination=${near.lat},${near.lon}&travelmode=driving" target="_blank" rel="noopener">Directions to ${near.n} ↗</a>
-    <a class="btn" href="https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}" target="_blank" rel="noopener">Open in Google Maps ↗</a></div>
-    <span class="dist">Distances are in a straight line.</span>`);
-  const x=card.querySelector('.x');x.onclick=()=>{card.hidden=true;placeLayer.clearLayers()};
-  map.fitBounds(L.latLngBounds([[p.lat,p.lon],[near.lat,near.lon]]).pad(.3),{maxZoom:15,paddingTopLeft:[20,70],paddingBottomRight:[20,card.offsetHeight+40]});
+  originCard(p,name,r.display_name,'#d93b3b');
 }
 // type-ahead suggestions from Photon (OpenStreetMap data), India only, biased to the current map view
 const KIND={residential:'Residential',apartments:'Apartments',commercial:'Commercial',office:'Office',retail:'Shopping',mall:'Mall',
